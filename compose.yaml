@@ -1,0 +1,6 @@
+services:
+  watchable:
+    build: .
+    environment:
+      TUNER_URL: ${TUNER_URL}
+      TZ: Asia/Tokyo
