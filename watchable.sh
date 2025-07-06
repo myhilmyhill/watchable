@@ -1,15 +1,17 @@
 #!/bin/bash
 
 force_run=false
-while getopts "f" opt; do
+restart_hour=5
+while getopts "fr:" opt; do
   case "$opt" in
     f) force_run=true ;;
+    r) restart_hour=$OPTARG ;;
   esac
 done
 
 # 0:00～6:00の間は放送休止があって408になるので処理をスキップ
 current_hour=$(date +'%H')
-if [ "$force_run" = false ] && [ "$current_hour" -ge 0 ] && [ "$current_hour" -lt 6 ]; then
+if [ "$force_run" = false ] && [ "$current_hour" -ne "$restart_hour" ] && [ "$current_hour" -ge 0 ] && [ "$current_hour" -lt 6 ]; then
   echo "放送休止のため0～6時はチェックしない（現在 $current_hour 時）"
   exit 0
 fi
@@ -35,6 +37,17 @@ no_free=$(echo "$tuners" | jq 'all(.isFree == false)')
 if [ "$no_free" == "true" ]; then
   echo "あきなし、チェックしない"
   exit 0
+fi
+
+if [ $(("10#$current_hour")) == "$restart_hour" ]; then
+  echo "再起動時間なので、可能であれば再起動します..."
+  no_use=$(curl -s "$TUNER_URL/api/tuners" | jq 'all(.isUsing == false)')
+  if [ "$no_use" == "true" ]; then
+    exit 2
+  else
+    echo "使われててだめだった"
+    exit 1
+  fi
 fi
 
 # 最大並列数
