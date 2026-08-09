@@ -9,3 +9,4 @@ services:
       TUNER_URL: ${TUNER_URL}
       CRON_MINUTES: ${CRON_MINUTES:-10,40}
       TZ: Asia/Tokyo
+      PYTHONUNBUFFERED: 1
