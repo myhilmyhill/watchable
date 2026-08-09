@@ -184,13 +184,103 @@ def check_ts_stream(service_name: str, service_id: str, tuner_url: str) -> bool:
         return True
 
 
+VENDOR_ID_USB_TROUBLESHOOTER = 0x07F7
+PRODUCT_ID_USB_TROUBLESHOOTER = 0x0023
+
+PAYLOAD_USB_ON = [
+    0x22, 0x01, 0x01, 0x7C, 0x07, 0x2E, 0x00, 0x1D,
+    0xF3, 0x01, 0x00, 0x34, 0xDC, 0x8F, 0x00, 0xE1,
+    0x2C, 0xD9, 0x72, 0x7C, 0x07, 0x2E, 0x00, 0x64,
+    0x08, 0x08, 0x00, 0x28, 0xC1, 0x19, 0x01, 0xD0,
+    0xDC, 0x8F, 0x00, 0xE3, 0x5F, 0xDD, 0x72, 0x44,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+]
+
+PAYLOAD_USB_OFF = [
+    0x22, 0x00, 0x00, 0x74, 0x08, 0x17, 0x00, 0x1D,
+    0xF3, 0x01, 0x00, 0x34, 0xDC, 0x8F, 0x00, 0xE1,
+    0x2C, 0xD9, 0x72, 0x74, 0x08, 0x17, 0x00, 0xB2,
+    0x08, 0x0C, 0x00, 0x28, 0xC1, 0x19, 0x01, 0xD0,
+    0xDC, 0x8F, 0x00, 0xE3, 0x5F, 0xDD, 0x72, 0x44,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+]
+
+
+def send_usb_troubleshooter_payload(command_type: str) -> bool:
+    """USB troubleshooter lite に on / off コマンドを送信する"""
+    try:
+        import usb.core
+        import usb.util
+    except ImportError:
+        print("Error: pyusb (usb) モジュールが見つかりません", file=sys.stderr)
+        return False
+
+    dev = usb.core.find(
+        idVendor=VENDOR_ID_USB_TROUBLESHOOTER,
+        idProduct=PRODUCT_ID_USB_TROUBLESHOOTER,
+    )
+    if dev is None:
+        print("Error: USB troubleshooter lite デバイスが見つかりません", file=sys.stderr)
+        return False
+
+    try:
+        try:
+            if dev.is_kernel_driver_active(0):
+                dev.detach_kernel_driver(0)
+        except Exception:
+            pass
+
+        payload = PAYLOAD_USB_ON if command_type == "on" else PAYLOAD_USB_OFF
+
+        dev.ctrl_transfer(0x21, 0x0A, 0x0000, 0x0000, None)
+        dev.ctrl_transfer(0x80, 0x06, 0x0303, 0x0409, 255)
+        time.sleep(0.05)
+
+        try:
+            dev.ctrl_transfer(0x21, 0x09, 0x0300, 0x0000, payload)
+        except usb.core.USBError as e:
+            if getattr(e, "errno", None) == 32:
+                pass
+            else:
+                raise e
+        return True
+    except Exception as e:
+        print(f"Error: USB troubleshooter lite 送信失敗: {e}", file=sys.stderr)
+        return False
+    finally:
+        try:
+            usb.util.dispose_resources(dev)
+        except Exception:
+            pass
+
+
+def reset_usb_power() -> bool:
+    """USB troubleshooter lite による USB 電源リセット (off -> 3秒待機 -> on)"""
+    print("USB troubleshooter lite による USB 電源リセットを実行します (off -> on)...")
+    if not send_usb_troubleshooter_payload("off"):
+        print("USB 電源 OFF の送信に失敗しました")
+        return False
+
+    print("USB 電源を OFF にしました。3秒待機します...")
+    time.sleep(3)
+
+    if not send_usb_troubleshooter_payload("on"):
+        print("USB 電源 ON の送信に失敗しました")
+        return False
+
+    print("USB 電源を ON にしました。デバイス再認識を待機します (5秒)...")
+    time.sleep(5)
+    return True
+
+
 def run_check(args) -> int:
     """
     1回分の監視処理を実行する。
     戻り値:
       0: 正常終了またはスキップ
       1: エラー発生（リトライ上限到達、チューナー使用中など）
-      2: 再起動要求（定期再起動時刻 or 全リトライ失敗 かつ 未使用状態）
+      2: 朝5時等の定期再起動要求（ホストOS再起動）
+      3: 毎時チェック失敗時のUSBリセット要求（USB電源リセット）
     """
     current_hour = datetime.datetime.now().hour
 
@@ -214,12 +304,12 @@ def run_check(args) -> int:
         return 0
 
     if current_hour == args.restart_hour:
-        print("再起動時間なので、可能であれば再起動します...")
+        print("再起動時間なので、可能であればホストOSを再起動します...")
         tuners = get_tuners(tuner_url)
         if tuners is not None and all(t.get("isUsing") is False for t in tuners):
             return 2
         else:
-            print("使われててだめだった")
+            print("使われててだめだった（チューナー使用中）")
             return 1
 
     max_p = len(free_tuners)
@@ -255,12 +345,12 @@ def run_check(args) -> int:
             print("全てのサービスが正常に処理されました。")
             return 0
 
-    print("全てのリトライが失敗しました。可能であれば再起動します...")
+    print("全てのリトライが失敗しました。可能であればUSBリセットを実行します...")
     tuners = get_tuners(tuner_url)
     if tuners is not None and all(t.get("isUsing") is False for t in tuners):
-        return 2
+        return 3
     else:
-        print("使われててだめだった")
+        print("使われててだめだった（チューナー使用中）")
         return 1
 
 
@@ -373,6 +463,11 @@ def parse_args():
         action="store_true",
         help="再起動要求時（exit code 2）にホストOS再起動コマンドを実行しない",
     )
+    parser.add_argument(
+        "--no-usb-reset",
+        action="store_true",
+        help="USBリセット要求時（code 3）にUSBリセットコマンドを実行しない",
+    )
     return parser.parse_args()
 
 
@@ -383,6 +478,8 @@ def main():
         code = run_check(args)
         if code == 2 and not args.no_reboot:
             reboot_host()
+        elif code == 3 and not args.no_usb_reset:
+            reset_usb_power()
         sys.exit(code)
 
     target_minutes = parse_minutes(args.minutes)
@@ -410,6 +507,11 @@ def main():
             else:
                 print("再起動が要求されましたが --no-reboot のため終了します (exit 2)")
                 sys.exit(2)
+        elif code == 3:
+            if not args.no_usb_reset:
+                reset_usb_power()
+            else:
+                print("USBリセットが要求されましたが --no-usb-reset のためスキップします")
 
     while running:
         now = datetime.datetime.now()
@@ -438,6 +540,11 @@ def main():
             else:
                 print("再起動が要求されましたが --no-reboot のため終了します (exit 2)")
                 sys.exit(2)
+        elif code == 3:
+            if not args.no_usb_reset:
+                reset_usb_power()
+            else:
+                print("USBリセットが要求されましたが --no-usb-reset のためスキップします")
 
         # 実行直後、同じ分内で二重実行されないよう最低1秒スリープ
         time.sleep(1)

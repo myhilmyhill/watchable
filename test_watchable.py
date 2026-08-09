@@ -121,6 +121,22 @@ pid=0x0100, total=   4567, d=  1, error=  0"""
         code = watchable.run_check(args)
         self.assertEqual(code, 2)
 
+    @patch("watchable.datetime")
+    @patch.dict(os.environ, {"TUNER_URL": "http://localhost:40772"})
+    @patch("watchable.get_tuners")
+    @patch("watchable.check_ts_stream", return_value=False)
+    def test_run_check_failure_code_3(self, mock_check_stream, mock_get_tuners, mock_dt):
+        # 朝5時以外 (例: 18時) でチェック失敗 -> 未使用なら USB リセット (code 3)
+        mock_dt.datetime.now.return_value = datetime.datetime(2026, 8, 9, 18, 0, 0)
+        mock_get_tuners.return_value = [
+            {"name": "tuner0", "isFree": True, "isUsing": False}
+        ]
+        args = MagicMock()
+        args.force = False
+        args.restart_hour = 5
+        code = watchable.run_check(args)
+        self.assertEqual(code, 3)
+
     @patch("watchable.run_check", return_value=0)
     @patch("sys.argv", ["watchable.py", "--once"])
     def test_main_once(self, mock_run_check):
@@ -132,3 +148,4 @@ pid=0x0100, total=   4567, d=  1, error=  0"""
 
 if __name__ == "__main__":
     unittest.main()
+

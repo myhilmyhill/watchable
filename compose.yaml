@@ -5,6 +5,7 @@ services:
     privileged: true
     volumes:
       - /var/run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket
+      - /dev/bus/usb:/dev/bus/usb
     environment:
       TUNER_URL: ${TUNER_URL}
       CRON_MINUTES: ${CRON_MINUTES:-10,40}
