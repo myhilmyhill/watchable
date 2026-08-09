@@ -115,14 +115,18 @@ def check_ts_stream(service_name: str, service_id: str, tuner_url: str) -> bool:
             print(f"{name} Error: tsselect コマンドが見つかりません")
             return False
 
+        stdout_bytes = b""
         try:
             stream_start = time.time()
             while time.time() - stream_start < 5.0:
                 chunk = resp.read(32768)
                 if not chunk:
                     break
-                proc.stdin.write(chunk)
-                proc.stdin.flush()
+                try:
+                    proc.stdin.write(chunk)
+                    proc.stdin.flush()
+                except (BrokenPipeError, OSError):
+                    break
         except Exception as e:
             print(f"{name} Error: ストリーム転送中にエラー - {e}")
             proc.kill()
@@ -134,12 +138,21 @@ def check_ts_stream(service_name: str, service_id: str, tuner_url: str) -> bool:
                 pass
 
         try:
-            stdout_bytes, _ = proc.communicate(timeout=5)
-            stdout = stdout_bytes.decode("utf-8", errors="ignore")
-        except subprocess.TimeoutExpired:
+            stdout_bytes = proc.stdout.read()
+            proc.wait(timeout=5)
+        except Exception:
             proc.kill()
-            stdout_bytes, _ = proc.communicate()
-            stdout = stdout_bytes.decode("utf-8", errors="ignore")
+            try:
+                stdout_bytes = proc.stdout.read()
+            except Exception:
+                pass
+        finally:
+            try:
+                proc.stdout.close()
+            except Exception:
+                pass
+
+        stdout = stdout_bytes.decode("utf-8", errors="ignore")
 
         if proc.returncode != 0 or not stdout.strip():
             print(f"{name} Error: TSじゃない")
@@ -224,8 +237,12 @@ def run_check(args) -> int:
             }
 
             for future in concurrent.futures.as_completed(futures):
-                success = future.result()
-                if not success:
+                try:
+                    success = future.result()
+                    if not success:
+                        failure_occurred = True
+                except Exception as e:
+                    print(f"チェック処理中にエラーが発生しました: {e}")
                     failure_occurred = True
 
         if failure_occurred:
