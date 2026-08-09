@@ -1,6 +1,8 @@
 services:
   watchable:
     build: .
+    restart: unless-stopped
     environment:
       TUNER_URL: ${TUNER_URL}
+      CRON_MINUTES: ${CRON_MINUTES:-10,40}
       TZ: Asia/Tokyo
