@@ -295,6 +295,49 @@ def get_next_run_time(now: datetime.datetime, target_minutes: list[int]) -> date
     return next_hour
 
 
+def reboot_host():
+    """ホストOSの再起動を試行する"""
+    print("ホストOSの再起動を要求します...")
+
+    # 1. systemctl reboot (D-Bus マウント時)
+    try:
+        res = subprocess.run(
+            ["systemctl", "reboot"], capture_output=True, text=True, timeout=10
+        )
+        if res.returncode == 0:
+            print("systemctl reboot を送信しました")
+            time.sleep(5)
+            sys.exit(2)
+    except Exception as e:
+        print(f"systemctl reboot 試行: {e}")
+
+    # 2. reboot コマンド
+    try:
+        res = subprocess.run(
+            ["reboot"], capture_output=True, text=True, timeout=10
+        )
+        if res.returncode == 0:
+            print("reboot コマンドを実行しました")
+            time.sleep(5)
+            sys.exit(2)
+    except Exception as e:
+        print(f"reboot 試行: {e}")
+
+    # 3. SysRq トリガーによる強制再起動 (特権モード時)
+    try:
+        if os.path.exists("/proc/sysrq-trigger"):
+            with open("/proc/sysrq-trigger", "w") as f:
+                f.write("b")
+            print("SysRq (b) トリガーを送信しました")
+            time.sleep(5)
+            sys.exit(2)
+    except Exception as e:
+        print(f"sysrq-trigger 試行: {e}")
+
+    print("ホスト再起動コマンドがすべて失敗しました。プロセスを終了します (exit 2)")
+    sys.exit(2)
+
+
 def parse_args():
     default_minutes = os.environ.get("CRON_MINUTES", "10,40")
     parser = argparse.ArgumentParser(description="Watchable stream monitor")
@@ -325,6 +368,11 @@ def parse_args():
         action="store_true",
         help="起動時の即時実行をスキップし、次の指定時刻まで待機する",
     )
+    parser.add_argument(
+        "--no-reboot",
+        action="store_true",
+        help="再起動要求時（exit code 2）にホストOS再起動コマンドを実行しない",
+    )
     return parser.parse_args()
 
 
@@ -333,6 +381,8 @@ def main():
 
     if args.once:
         code = run_check(args)
+        if code == 2 and not args.no_reboot:
+            reboot_host()
         sys.exit(code)
 
     target_minutes = parse_minutes(args.minutes)
@@ -355,8 +405,11 @@ def main():
         print(f"\n[{now_str}] 起動時チェック実行")
         code = run_check(args)
         if code == 2:
-            print("再起動が要求されたためプロセスを終了します (exit 2)")
-            sys.exit(2)
+            if not args.no_reboot:
+                reboot_host()
+            else:
+                print("再起動が要求されましたが --no-reboot のため終了します (exit 2)")
+                sys.exit(2)
 
     while running:
         now = datetime.datetime.now()
@@ -380,8 +433,11 @@ def main():
         code = run_check(args)
 
         if code == 2:
-            print("再起動が要求されたためプロセスを終了します (exit 2)")
-            sys.exit(2)
+            if not args.no_reboot:
+                reboot_host()
+            else:
+                print("再起動が要求されましたが --no-reboot のため終了します (exit 2)")
+                sys.exit(2)
 
         # 実行直後、同じ分内で二重実行されないよう最低1秒スリープ
         time.sleep(1)

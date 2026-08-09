@@ -2,6 +2,9 @@ services:
   watchable:
     build: .
     restart: unless-stopped
+    privileged: true
+    volumes:
+      - /var/run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket
     environment:
       TUNER_URL: ${TUNER_URL}
       CRON_MINUTES: ${CRON_MINUTES:-10,40}
